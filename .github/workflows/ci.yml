@@ -1,0 +1,92 @@
+
+name: Go CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install CLI dependencies
+        run: npm ci
+
+      # Run unit tests without requiring Supabase or Netlify Dev.
+      # Integration tests skip themselves because RUN_INTEGRATION_TESTS
+      # is not set.
+      - name: Run unit tests
+        run: go test -v ./...
+
+      - name: Start local Supabase
+        run: npx supabase start
+
+      # Rebuild the local database from committed migrations.
+      - name: Apply database migrations
+        run: npx supabase db reset --local
+
+      # Export the local Supabase URL and service-role key
+      # under the environment variable names expected by Go.
+      - name: Configure local Supabase credentials
+        shell: bash
+        run: |
+          npx supabase status -o env \
+            --override-name API_URL=SUPABASE_URL,SECRET_KEY==SUPABASE_SERVICE_ROLE_KEY \
+            >> "$GITHUB_ENV"
+
+      - name: Start Netlify Dev
+        shell: bash
+        run: |
+          nohup npx netlify dev --port 8888 \
+            > /tmp/netlify-dev.log 2>&1 &
+          echo $! > /tmp/netlify-dev.pid
+
+      - name: Wait for Netlify Dev
+        shell: bash
+        run: |
+          for i in {1..60}; do
+            if curl --silent --output /dev/null http://127.0.0.1:8888/; then
+              echo "Netlify Dev is ready"
+              exit 0
+            fi
+            sleep 1
+          done
+
+          echo "Netlify Dev failed to start"
+          cat /tmp/netlify-dev.log
+          exit 1
+
+      - name: Run integration tests
+        env:
+          RUN_INTEGRATION_TESTS: "1"
+          NETLIFY_URL: http://127.0.0.1:8888
+        run: go test -v ./...
+
+      - name: Print Netlify logs on failure
+        if: failure()
+        run: cat /tmp/netlify-dev.log || true
+
+      - name: Stop local Supabase
+        if: always()
+        run: npx supabase stop

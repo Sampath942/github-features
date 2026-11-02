@@ -1,0 +1,28 @@
+{
+  "name": "github-features",
+  "version": "1.0.0",
+  "description": "Create an embeddable profile-views badge for a GitHub username. Each request records a view in Supabase and returns an SVG badge showing the updated count.",
+  "main": "index.js",
+  "directories": {
+    "test": "tests"
+  },
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Sampath942/github-features.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/Sampath942/github-features/issues"
+  },
+  "homepage": "https://github.com/Sampath942/github-features#readme",
+  "devDependencies": {
+    "netlify-cli": "^27.16.2",
+    "supabase": "^3.0.0"
+  }
+}
