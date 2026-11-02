@@ -28,8 +28,13 @@ func TestFetchCountsPersistsCountThroughNetlifyAndSupabase(t *testing.T) {
 	}
 
 	secondResponse := requestBadge(t, baseURL, username, "900")
-	if !strings.Contains(secondResponse, `aria-label="Profile views: 41"`) {
-		t.Fatalf("second response did not increment existing count: %s", secondResponse)
+	if !strings.Contains(secondResponse, `aria-label="Profile views: 900"`) {
+		t.Fatalf("second response did not set the requested count: %s", secondResponse)
+	}
+
+	thirdResponse := requestBadge(t, baseURL, username, "")
+	if !strings.Contains(thirdResponse, `aria-label="Profile views: 901"`) {
+		t.Fatalf("third response did not increment the existing count: %s", thirdResponse)
 	}
 }
 
@@ -42,7 +47,9 @@ func requestBadge(t *testing.T, baseURL, username, initialCount string) string {
 	}
 	query := endpoint.Query()
 	query.Set("username", username)
-	query.Set("views_count", initialCount)
+	if initialCount != "" {
+		query.Set("views_count", initialCount)
+	}
 	endpoint.RawQuery = query.Encode()
 
 	request, err := http.NewRequest(http.MethodGet, endpoint.String(), nil)

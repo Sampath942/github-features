@@ -17,7 +17,6 @@ import (
 )
 
 func Handler(ctx context.Context, req events.APIGatewayProxyRequest) (events.APIGatewayProxyResponse, error) {
-	var updated_views int64 = 1
 	if req.HTTPMethod != http.MethodGet {
 		return events.APIGatewayProxyResponse{
 			StatusCode: http.StatusMethodNotAllowed,
@@ -32,25 +31,26 @@ func Handler(ctx context.Context, req events.APIGatewayProxyRequest) (events.API
 			Body:       "Username is required",
 		}, nil
 	}
-	view_count := req.QueryStringParameters["views_count"]
-	if strings.TrimSpace(view_count) != "" {
-		view_count_int, err := strconv.ParseInt(view_count, 10, 64)
+
+	var viewsCount *int64
+	if rawViewsCount, provided := req.QueryStringParameters["views_count"]; provided {
+		parsedViewsCount, err := strconv.ParseInt(rawViewsCount, 10, 64)
 		if err != nil {
 			return events.APIGatewayProxyResponse{
 				StatusCode: http.StatusBadRequest,
 				Body:       "Invalid views_count value",
 			}, nil
 		}
-		if view_count_int < 0 {
+		if parsedViewsCount < 0 {
 			return events.APIGatewayProxyResponse{
 				StatusCode: http.StatusBadRequest,
 				Body:       "views_count must be a non-negative integer",
 			}, nil
 		}
-		updated_views = view_count_int
+		viewsCount = &parsedViewsCount
 	}
 
-	viewcount, err := recordView(ctx, username, updated_views)
+	viewcount, err := recordView(ctx, username, viewsCount)
 
 	if err != nil {
 		return events.APIGatewayProxyResponse{
@@ -74,7 +74,7 @@ func Handler(ctx context.Context, req events.APIGatewayProxyRequest) (events.API
 func recordView(
 	ctx context.Context,
 	username string,
-	initialViews int64,
+	viewsCount *int64,
 ) (models.ViewCount, error) {
 
 	supabaseURL := os.Getenv("SUPABASE_URL")
@@ -88,7 +88,7 @@ func recordView(
 
 	payload := map[string]any{
 		"p_username":      username,
-		"p_initial_views": initialViews,
+		"p_initial_views": viewsCount,
 	}
 
 	body, err := json.Marshal(payload)

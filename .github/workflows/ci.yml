@@ -51,9 +51,19 @@ jobs:
       - name: Configure local Supabase credentials
         shell: bash
         run: |
-          npx supabase status -o env \
-            --override-name API_URL=SUPABASE_URL,SECRET_KEY==SUPABASE_SERVICE_ROLE_KEY \
-            >> "$GITHUB_ENV"
+          status="$(npx supabase status -o json)"
+          supabase_url="$(jq -r '.API_URL // empty' <<< "$status")"
+          service_role_key="$(jq -r '.SECRET_KEY // empty' <<< "$status")"
+
+          if [[ -z "$supabase_url" || -z "$service_role_key" ]]; then
+            echo "Supabase status did not provide API_URL and SERVICE_ROLE_KEY" >&2
+            exit 1
+          fi
+
+          {
+            printf 'SUPABASE_URL=%s\n' "$supabase_url"
+            printf 'SUPABASE_SERVICE_ROLE_KEY=%s\n' "$service_role_key"
+          } >> "$GITHUB_ENV"
 
       - name: Start Netlify Dev
         shell: bash

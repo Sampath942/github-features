@@ -37,8 +37,8 @@ func TestHandlerRecordsViewAndReturnsSVG(t *testing.T) {
 		if got, want := payload["p_username"], username; got != want {
 			t.Errorf("p_username = %#v, want %q", got, want)
 		}
-		if got, want := payload["p_initial_views"], float64(1); got != want {
-			t.Errorf("p_initial_views = %#v, want %v", got, want)
+		if got := payload["p_initial_views"]; got != nil {
+			t.Errorf("p_initial_views = %#v, want null when views_count is omitted", got)
 		}
 		responseBody, err := json.Marshal([]map[string]any{
 			{"id": 1, "username": username, "views_count": 12},
@@ -73,7 +73,7 @@ func TestHandlerRecordsViewAndReturnsSVG(t *testing.T) {
 	}
 }
 
-func TestHandlerUsesOptionalInitialCount(t *testing.T) {
+func TestHandlerUsesProvidedViewsCount(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var payload map[string]any
 		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
@@ -134,6 +134,12 @@ func TestHandlerRejectsInvalidRequests(t *testing.T) {
 			name:       "invalid count",
 			method:     http.MethodGet,
 			parameters: map[string]string{"username": "octocat", "views_count": "many"},
+			wantStatus: http.StatusBadRequest,
+		},
+		{
+			name:       "empty count",
+			method:     http.MethodGet,
+			parameters: map[string]string{"username": "octocat", "views_count": ""},
 			wantStatus: http.StatusBadRequest,
 		},
 		{
