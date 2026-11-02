@@ -18,10 +18,12 @@ import (
 )
 
 func handler(ctx context.Context, req events.APIGatewayProxyRequest) (events.APIGatewayProxyResponse, error) {
-	if req.HTTPMethod != http.MethodPost {
+	fmt.Println("Helloooooo")
+	var updated_views int64 = 1
+	if req.HTTPMethod != http.MethodGet {
 		return events.APIGatewayProxyResponse{
 			StatusCode: http.StatusMethodNotAllowed,
-			Body:       "Method not allowed",
+			Body:       "Method not allowed" + req.HTTPMethod,
 		}, nil
 	}
 
@@ -32,35 +34,90 @@ func handler(ctx context.Context, req events.APIGatewayProxyRequest) (events.API
 			Body:       "Username is required",
 		}, nil
 	}
+	view_count := req.QueryStringParameters["views_count"]
+	if strings.TrimSpace(view_count) != "" {
+		fmt.Println("view_count is not empty:", view_count)
+		view_count_int, err := strconv.ParseInt(view_count, 10, 64)
+		if err != nil {
+			return events.APIGatewayProxyResponse{
+				StatusCode: http.StatusBadRequest,
+				Body:       "Invalid views_count value",
+			}, nil
+		}
+		if view_count_int < 0 {
+			return events.APIGatewayProxyResponse{
+				StatusCode: http.StatusBadRequest,
+				Body:       "views_count must be a non-negative integer",
+			}, nil
+		}
+		updated_views = view_count_int
+	}
+
+	viewcount, err := recordView(ctx, username, updated_views)
+
+	if err != nil {
+		return events.APIGatewayProxyResponse{
+			StatusCode: http.StatusInternalServerError,
+			Body:       fmt.Sprintf("Error recording view: %v", err),
+		}, nil
+	}
+
+	svg := generateSVG(viewcount.Views)
+
+	return events.APIGatewayProxyResponse{
+		StatusCode: 200,
+		Headers: map[string]string{
+			"Content-Type":  "image/svg+xml",
+			"Cache-Control": "no-store, no-cache, must-revalidate",
+		},
+		Body: svg,
+	}, nil
+}
+
+func recordView(
+	ctx context.Context,
+	username string,
+	initialViews int64,
+) (models.ViewCount, error) {
 
 	supabaseURL := os.Getenv("SUPABASE_URL")
 	serviceRoleKey := os.Getenv("SUPABASE_SERVICE_ROLE_KEY")
+
 	if supabaseURL == "" || serviceRoleKey == "" {
-		return events.APIGatewayProxyResponse{
-			StatusCode: http.StatusInternalServerError,
-			Body:       "Missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY",
-		}, nil
+		return models.ViewCount{}, fmt.Errorf(
+			"missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY",
+		)
 	}
 
-	query := url.Values{}
-	query.Set("select", "id,views")
-	query.Set("username", postgrestEquals(username))
-	endpoint, err := viewCountEndpoint(supabaseURL, query)
+	payload := map[string]any{
+		"p_username":      username,
+		"p_initial_views": initialViews,
+	}
+
+	body, err := json.Marshal(payload)
 	if err != nil {
-		return events.APIGatewayProxyResponse{
-			StatusCode: http.StatusInternalServerError,
-			Body:       "Invalid Supabase URL",
-		}, nil
+		return models.ViewCount{}, err
 	}
 
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	endpoint, err := url.Parse(
+		strings.TrimRight(supabaseURL, "/") +
+			"/rest/v1/rpc/record_view",
+	)
 	if err != nil {
-		return events.APIGatewayProxyResponse{
-			StatusCode: http.StatusInternalServerError,
-			Body:       err.Error(),
-		}, nil
+		return models.ViewCount{}, err
 	}
 
+	httpReq, err := http.NewRequestWithContext(
+		ctx,
+		http.MethodPost,
+		endpoint.String(),
+		bytes.NewReader(body),
+	)
+	if err != nil {
+		return models.ViewCount{}, err
+	}
+
+	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("Authorization", "Bearer "+serviceRoleKey)
 	httpReq.Header.Set("apikey", serviceRoleKey)
 	httpReq.Header.Set("Accept", "application/json")
@@ -68,201 +125,65 @@ func handler(ctx context.Context, req events.APIGatewayProxyRequest) (events.API
 	client := &http.Client{}
 	resp, err := client.Do(httpReq)
 	if err != nil {
-		return events.APIGatewayProxyResponse{
-			StatusCode: http.StatusInternalServerError,
-			Body:       err.Error(),
-		}, nil
+		return models.ViewCount{}, err
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		b, _ := io.ReadAll(resp.Body)
-		return events.APIGatewayProxyResponse{
-			StatusCode: http.StatusBadGateway,
-			Body:       string(b),
-		}, nil
+		responseBody, _ := io.ReadAll(resp.Body)
+		return models.ViewCount{}, fmt.Errorf(
+			"Supabase RPC failed: status %d, body: %s",
+			resp.StatusCode,
+			string(responseBody),
+		)
 	}
 
-	var viewCounts []models.ViewCount
-	if err := json.NewDecoder(resp.Body).Decode(&viewCounts); err != nil {
-		return events.APIGatewayProxyResponse{
-			StatusCode: http.StatusBadGateway,
-			Body:       "Invalid response from Supabase",
-		}, nil
-	}
-	if len(viewCounts) == 0 {
-		if err := insertViewsCount(ctx, username); err != nil {
-			return events.APIGatewayProxyResponse{
-				StatusCode: http.StatusBadGateway,
-				Body:       "Failed to insert view count",
-			}, nil
-		}
+	var results []models.ViewCount
 
-		respBody, _ := json.Marshal(map[string]string{
-			"status": "Inserted views successfully",
-			"views":  strconv.FormatInt(1, 10),
-		})
-
-		return events.APIGatewayProxyResponse{
-			StatusCode: 200,
-			Headers: map[string]string{
-				"Content-Type": "application/json",
-			},
-			Body: string(respBody),
-		}, nil
-		
-	}
-	if len(viewCounts) != 1 {
-		return events.APIGatewayProxyResponse{
-			StatusCode: http.StatusConflict,
-			Body:       "Username matches multiple view counts",
-		}, nil
+	if err := json.NewDecoder(resp.Body).Decode(&results); err != nil {
+		return models.ViewCount{}, fmt.Errorf(
+			"decode RPC response: %w",
+			err,
+		)
 	}
 
-	viewsCount := viewCounts[0].Views + 1
-	if err := updateViewsCount(ctx, viewCounts[0].ID, viewsCount); err != nil {
-		return events.APIGatewayProxyResponse{
-			StatusCode: http.StatusBadGateway,
-			Body:       "Failed to update view count",
-		}, nil
+	if len(results) != 1 {
+		return models.ViewCount{}, fmt.Errorf(
+			"expected one result, got %d",
+			len(results),
+		)
 	}
 
-	respBody, _ := json.Marshal(map[string]string{
-		"status": "Updated views successfully",
-		"views":  strconv.FormatInt(viewsCount, 10),
-	})
-
-	return events.APIGatewayProxyResponse{
-		StatusCode: 200,
-		Headers: map[string]string{
-			"Content-Type": "application/json",
-		},
-		Body: string(respBody),
-	}, nil
+	return results[0], nil
 }
 
-func insertViewsCount(ctx context.Context, username string) error {
-	supabaseURL := os.Getenv("SUPABASE_URL")
-	serviceRoleKey := os.Getenv("SUPABASE_SERVICE_ROLE_KEY")
-	if supabaseURL == "" || serviceRoleKey == "" {
-		return fmt.Errorf("missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY")
-	}
-
-	payload := map[string]string{
-		"username":      username,
-		"views_count": "1",
-	}
-
-	body, err := json.Marshal(payload)
-	if err != nil {
-		fmt.Println("Failed to marshal payload:", err)
-		return err
-	}
-
-
-	query := url.Values{}
-	endpoint, err := viewCountEndpoint(supabaseURL, query)
-	if err != nil {
-		return err
-	}
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewBuffer(body))
-	if err != nil {
-		return err
-	}
-
-	httpReq.Header.Set("Content-Type", "application/json")
-	httpReq.Header.Set("Prefer", "return=representation")
-	httpReq.Header.Set("Authorization", "Bearer "+serviceRoleKey)
-	httpReq.Header.Set("apikey", serviceRoleKey)
-
-	client := &http.Client{}
-	resp, err := client.Do(httpReq)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("supabase insert failed with status %d", resp.StatusCode)
-	}
-
-	var updated []models.ViewCount
-	if err := json.NewDecoder(resp.Body).Decode(&updated); err != nil {
-		return fmt.Errorf("decode Supabase update response: %w", err)
-	}
-	if len(updated) != 1 {
-		return fmt.Errorf("expected one updated row, got %d", len(updated))
-	}
-
-	return nil
-}
-
-
-func updateViewsCount(ctx context.Context, id int64, viewsCount int64) error {
-	supabaseURL := os.Getenv("SUPABASE_URL")
-	serviceRoleKey := os.Getenv("SUPABASE_SERVICE_ROLE_KEY")
-	if supabaseURL == "" || serviceRoleKey == "" {
-		return fmt.Errorf("missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY")
-	}
-
-	payload := map[string]int64{
-		"views": viewsCount,
-	}
-
-	body, err := json.Marshal(payload)
-	if err != nil {
-		return err
-	}
-
-	query := url.Values{}
-	query.Set("id", fmt.Sprintf("eq.%d", id))
-	query.Set("select", "id,views")
-	endpoint, err := viewCountEndpoint(supabaseURL, query)
-	if err != nil {
-		return err
-	}
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPatch, endpoint, bytes.NewBuffer(body))
-	if err != nil {
-		return err
-	}
-
-	httpReq.Header.Set("Content-Type", "application/json")
-	httpReq.Header.Set("Prefer", "return=representation")
-	httpReq.Header.Set("Authorization", "Bearer "+serviceRoleKey)
-	httpReq.Header.Set("apikey", serviceRoleKey)
-
-	client := &http.Client{}
-	resp, err := client.Do(httpReq)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("supabase update failed with status %d", resp.StatusCode)
-	}
-
-	var updated []models.ViewCount
-	if err := json.NewDecoder(resp.Body).Decode(&updated); err != nil {
-		return fmt.Errorf("decode Supabase update response: %w", err)
-	}
-	if len(updated) != 1 {
-		return fmt.Errorf("expected one updated row, got %d", len(updated))
-	}
-
-	return nil
-}
-
-func viewCountEndpoint(baseURL string, query url.Values) (string, error) {
-	endpoint, err := url.Parse(strings.TrimRight(baseURL, "/") + "/rest/v1/view_count")
-	if err != nil {
-		return "", err
-	}
-	endpoint.RawQuery = query.Encode()
-	return endpoint.String(), nil
-}
-
-func postgrestEquals(value string) string {
-	escaped := strings.NewReplacer(`\`, `\\`, `"`, `\"`).Replace(value)
-	return `eq."` + escaped + `"`
+func generateSVG(views int64) string {
+	return fmt.Sprintf(`
+<svg xmlns="http://www.w3.org/2000/svg"
+     width="150"
+     height="20"
+     role="img"
+     aria-label="Profile views: %d">
+    <title>Profile views: %d</title>
+    <linearGradient id="b" x2="0" y2="100%%">
+        <stop offset="0" stop-color="#bbb" stop-opacity=".1"/>
+        <stop offset="1" stop-opacity=".1"/>
+    </linearGradient>
+    <clipPath id="r">
+        <rect width="150" height="20" rx="3" fill="#fff"/>
+    </clipPath>
+    <g clip-path="url(#r)">
+        <rect width="95" height="20" fill="#555"/>
+        <rect x="95" width="55" height="20" fill="#0e75b6"/>
+        <rect width="150" height="20" fill="url(#b)"/>
+    </g>
+    <g fill="#fff" text-anchor="middle"
+       font-family="Verdana,Geneva,DejaVu Sans,sans-serif"
+       font-size="11">
+        <text x="47.5" y="14">Profile views</text>
+        <text x="122.5" y="14">%d</text>
+    </g>
+</svg>`, views, views, views)
 }
 
 func main() {
