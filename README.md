@@ -2,13 +2,49 @@
 
 Create an embeddable profile-views badge for a GitHub username. Each request records a view in Supabase and returns an SVG badge showing the updated count.
 
-## 1. What is it?
+## What is it?
 
-This project is a Go function for Netlify backed by Supabase. It calls the `record_view` database function, which creates a counter for a username on the first request and atomically updates the count on later requests.
+This project is a Go function for Netlify backed by Supabase. It generates an SVG image, so it can be embedded in a Markdown README using the deployed Netlify URL.
 
-When `views_count` is provided, it sets the counter to that exact value. When it is omitted, the counter is incremented by one (or starts at `1` for a new username).
+## How to use?
 
-## 2. How to install?
+Embed this into your GitHub README
+
+```markdown
+![Profile views](https://github-badge-pro.netlify.app/.netlify/functions/fetch-counts?username=YOUR_GITHUB_USERNAME)
+```
+
+Replace the username field with your GitHub username.
+
+The function accepts a `GET` request. Its query string parameters are:
+
+- `username` (required): the GitHub username whose profile views are being recorded.
+- `views_count` (optional): a non-negative integer that replaces the stored count with that exact value. If omitted, the stored count increments by one; a new username starts at `1`.
+
+The response is an SVG image, so it can be embedded in a Markdown README using the deployed Netlify URL.
+
+Locally, the basic request is:
+
+```text
+http://localhost:8888/.netlify/functions/fetch-counts?username=YOUR_GITHUB_USERNAME
+```
+
+For example, to set the count to `100`:
+
+```text
+http://localhost:8888/.netlify/functions/fetch-counts?username=YOUR_GITHUB_USERNAME&views_count=100
+```
+
+For the next request, omit `views_count` to increment the count from `100` to `101`:
+
+```text
+http://localhost:8888/.netlify/functions/fetch-counts?username=YOUR_GITHUB_USERNAME
+```
+
+### <u>Note</u> : 
+If you are importing/exporting a view count from another service, call the endpoint with `views_count` set to the desired count on the first request. From the next request onward, remove `views_count` from the request; otherwise each request will replace the count instead of incrementing it.
+
+## Install (for running or hosting your own instance)
 
 You need:
 
@@ -17,10 +53,10 @@ You need:
 - A Supabase project
 - The Netlify CLI
 
-1. Clone this repository and install the Netlify CLI:
+1. Clone this repository and install the node dependencies:
 
    ```sh
-   npm install --global netlify-cli
+   npm install ci
    ```
 
 2. Apply the migration in `supabase/migrations` to your Supabase project. It creates the `view_count` table, its unique username constraint, and the atomic `record_view` function.
@@ -68,42 +104,14 @@ The integration test sends requests through the local Netlify function and verif
 
 4. In another terminal, opt in to and run the integration test:
 
-   ```powershell
-   $env:RUN_INTEGRATION_TESTS = "1"
+   ```sh
+   export RUN_INTEGRATION_TESTS = "1"
    go test ./tests/integration
    ```
 
    The test uses `http://localhost:8888` by default. Set `NETLIFY_URL` to override it. The integration test is skipped during the regular `go test ./...` run unless `RUN_INTEGRATION_TESTS=1` is set.
 
-## 3. How to use?
 
-The function accepts a `GET` request. Its query string parameters are:
+## Acknowledgement
 
-- `username` (required): the GitHub username whose profile views are being recorded.
-- `views_count` (optional): a non-negative integer that replaces the stored count with that exact value. If omitted, the stored count increments by one; a new username starts at `1`.
-
-Locally, the basic request is:
-
-```text
-http://localhost:8888/.netlify/functions/fetch-counts?username=YOUR_GITHUB_USERNAME
-```
-
-For example, to set the count to `100`:
-
-```text
-http://localhost:8888/.netlify/functions/fetch-counts?username=YOUR_GITHUB_USERNAME&views_count=100
-```
-
-For the next request, omit `views_count` to increment the count from `100` to `101`:
-
-```text
-http://localhost:8888/.netlify/functions/fetch-counts?username=YOUR_GITHUB_USERNAME
-```
-
-If you are importing/exporting a view count from another service, call the endpoint with `views_count` set to the desired count on the first request. From the next request onward, remove `views_count` from the request; otherwise each request will replace the count instead of incrementing it.
-
-The response is an SVG image, so it can be embedded in a Markdown README using the deployed Netlify URL:
-
-```markdown
-![Profile views](https://YOUR_SITE.netlify.app/.netlify/functions/fetch-counts?username=YOUR_GITHUB_USERNAME)
-```
+This project is heavily inspired by the [github-profile-views-counter](https://github.com/antonkomarev/github-profile-views-counter) project.
